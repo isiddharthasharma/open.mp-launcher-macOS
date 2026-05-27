@@ -53,3 +53,60 @@ export const getUpdateInfo = async (): Promise<
     };
   }
 };
+
+// macOS ARM fork release metadata. The launcher self-update modal is driven by
+// this repository's GitHub releases — not api.open.mp — so an upstream Windows
+// release never triggers an "update available" prompt on the macOS build.
+export interface ForkRelease {
+  version: string;          // tag_name with leading "v" stripped, e.g. "1.6.3-arm-beta.1"
+  download: string;         // browser_download_url of the first .dmg asset, falling back to the release page
+  changelog: string;        // release body (markdown)
+}
+
+const FORK_RELEASES_URL =
+  "https://api.github.com/repos/Mac-Andreas/omp-launcher-macOS/releases/latest";
+
+export const getForkReleaseInfo = async (): Promise<
+  ApiResponse<ForkRelease | undefined>
+> => {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(FORK_RELEASES_URL, {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) {
+      return { success: false, data: undefined, error: `HTTP ${res.status}` };
+    }
+    const json: {
+      tag_name?: string;
+      html_url?: string;
+      body?: string;
+      assets?: { name?: string; browser_download_url?: string }[];
+    } = await res.json();
+    const tag = (json.tag_name || "").replace(/^v/, "");
+    if (!tag) {
+      return { success: false, data: undefined, error: "no tag_name" };
+    }
+    const dmg = (json.assets || []).find(
+      (a) => a.name && /\.dmg$/i.test(a.name)
+    );
+    return {
+      success: true,
+      data: {
+        version: tag,
+        download: dmg?.browser_download_url || json.html_url || "",
+        changelog: json.body || "",
+      },
+    };
+  } catch (error) {
+    Log.debug("Failed to fetch fork release info:", error);
+    return {
+      success: false,
+      data: undefined,
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+};
